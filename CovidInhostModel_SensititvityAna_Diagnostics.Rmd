@@ -1,0 +1,399 @@
+---
+title: "SenAna_Diag_0729"
+output: html_document
+---
+
+
+```{r}
+#Initialise Model prior to CI 
+#parms
+library(deSolve)
+
+parameters_i <- c(p=2.5, #Viral production rate (Fitting)
+                ki=3.5*10^-8,  #Rate of infection of Target cells per infected cell (Fitting)
+                di=1.07,#Death rate of infected cells (Kim et al, Fitting)
+                dv=2.3, #Clearance of viral particles (Fitting)
+                um=0.005,#Rate of viral neutralization by IgM
+                am=0.0,#Rate of IgM consumption because of neutralization
+                ug=0.05,#Rate of viral neutralization by IgG
+                ag=0.0,#Rate of IgG consumption because of neutralization
+                b1=10^-4,# Rate of B cell activation because of virus
+                b2=0.05,#B cell deactivation
+                pm=100, #IgM production rate
+                pg=80,#IgG production rate
+                rm=0.25,#IgM degradation rate
+                rg=0.01,
+                g=0.8,
+                K=4*10^8)
+
+#init
+initV<-1#Initial viral laod
+initI<-0 # Intial infected cells
+initE<-4*10^8 # Target cells (Epithelial cells in the URT)
+
+
+state_i <- c(V=initV, I=initI, E=initE, B=0, Am=0, Ag=0)
+#time
+# Set the start and end time for the model simulation
+day_start <- 0
+day_stop <- 200
+times <- seq(day_start, day_stop, by = 1/24)
+
+Cov_i<-function(t, state_i, parameters) 
+{
+  with(as.list(c(state_i, parameters)),
+       {
+         # define variables
+         
+         
+         
+         # rate of change
+         dE<- -ki*V*E +g*E*(1-((E+I)/K))
+         dI<- ki*V*E-di*I
+         dV<- p*I-dv*V -um*V*Am -ug*V*Ag
+         dB<-b1*V*(1-B)-b2*B
+         dAm<-pm*B-rm*Am-am*V*Am
+         dAg<-pg*B-rg*Ag-ag*V*Ag
+         # return the rate of change
+         list(c(dV,dI,dE,dB,dAm,dAg))
+       }
+  ) 
+  
+}
+
+
+#model 
+model.out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+```
+
+```{r}
+#Sample from OPTIMISED Parameter CI
+di <- runif(10000, 0.71, 1.91)
+dv <- runif(10000, 0.8, 4)
+
+#Run model 10000 using 1000 parameter value sets
+library(parallelly)
+library(parallel)
+library(doParallel)
+library(tibble)
+library(tidyverse)
+library(dplyr)
+
+cl <- makeCluster(8)
+registerDoParallel(cl)
+tpd_all<-NULL
+modelResults <- foreach(ind = 1:1000, .packages=c("deSolve")) %dopar% {
+  parameters_i[['di']] = di[ind]
+  parameters_i[['dv']] = dv[ind]
+
+  model.out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+  return(model.out[,'V'])
+} 
+
+modelResults.final <- list()
+
+for(i in 1:length(modelResults[[1]])){
+  modelResults.final[[i]]=sapply(modelResults,`[[`, i)
+}
+
+                 
+#Get 5%, 50%, 95% for each time point
+
+modelResults.CI <- sapply(modelResults.final, function(virus) {
+  quantile(virus, c(.05,.50,.95)) %>% as_tibble
+}) 
+
+
+#Convert to dataframe 
+modelResults.CI = do.call(rbind,modelResults.CI)
+rownames(modelResults.CI)=1:length(modelResults[[1]])
+colnames(modelResults.CI) = c("CI0.05","CI0.50","CI0.95")
+res <- modelResults.CI %>%     as.data.frame 
+
+res$time<-times[1:4801]
+
+
+colnames(res)<-c("v5",'v50','v95','time')
+
+
+
+#Figure 22
+plot_sensana<-ggplot(data=res, aes(x=time)) +
+  geom_line(aes(y=v50), color='dark blue', size=1) +
+  geom_ribbon(aes(x=time, ymax=v95, ymin=v5), fill="blue", alpha=0.1)+xlim(0,20)+xlab("Time in days")+
+  ylab("Viral load in copies/ml")+
+  ggtitle("2-way sensitivity analysis: Viral dynamics")+  
+       theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15))
+
+
+#Figure 23
+plot_sensana_log<-ggplot(data=res, aes(x=time)) +
+  geom_line(aes(y=log10(v50)), color='dark blue', size=1) +
+  geom_ribbon(aes(x=time, ymax=log10(v95), ymin=log10(v5)), fill="blue", alpha=0.1)+xlim(0,20)+ylim(-2,10)+
+       theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15))+
+    ggtitle("2-way sensitivity analysis: Viral dynamics (Log scale)")+
+   ylab("Viral load: log 10 copies/ml")
+ 
+
+```
+modelResults has list of 1000 runs: 4800 timepoint values per run
+modelResults.final has list of timepoints ( 1000 values per time point)
+
+```{r}
+
+#Range of peak viral loads  for 1000 runs
+modelResults.peak<- sapply(modelResults, function(virus) {
+  max(virus) %>% as_tibble
+}) 
+
+peak<-t(as.data.frame(modelResults.peak))
+range(peak)
+log10(range(peak))
+
+##Range of viral loads at symptom onset  for 1000 runs
+
+modelResults.vso<- sapply(modelResults, function(virus) {
+  virus[120] %>% as_tibble
+}) 
+
+vso<-t(as.data.frame(modelResults.vso))
+range(vso)
+log10(range(vso))
+
+```
+Figure 24: : Relationship between immune parameters and positivity duration on WHO recommended Ag-RDT
+Figure 25: Relationship between immune parameters and positivity duration on four different tests 
+```{r}
+#Figure24
+#For WHO recommended test LoD=10^6 cp/ml
+
+diagResults <- foreach(ind = 1:1000, .packages=c("deSolve")) %dopar% {
+  parameters_i[['di']] = di[ind]
+  parameters_i[['dv']] = dv[ind]
+  
+  model.out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+  mod<-as.data.frame(model.out[,'V'])
+  colnames(mod)<-'v'
+  mod$ts<-ifelse(mod$v>10^6,1,0)
+  mod$time<-model.out[,'time']
+  mod0<-subset(mod,mod$ts>0)
+  tpd<-c( parameters_i[['dv']], parameters_i[['di']], min(mod0$time),max(mod0$time))
+  return(tpd)
+}
+
+d=as.data.frame(diagResults)
+d1<-as.data.frame(t(d))
+rownames(d1)<-NULL
+colnames(d1)<-c("dv","di","ts","te")
+d1<-d1[order(d1$dv,d1$di),]
+d1$tpd<-d1$te-d1$ts
+plot(d1$di,d1$tpd)
+
+
+is.na(d1)<-sapply(d1, is.infinite)
+d1[is.na(d1)]<-0
+table(d1$tpd<1)
+table(d1$tpd<3)
+
+
+library(viridis)
+
+
+library(ggplot2)
+p25<- ggplot(d1, aes(x = di, y = tpd, color=dv))+geom_point()+
+   xlab("Infected cell clearance rate")+ylab("Duration of testing positive")+
+   ggtitle("Immune parameters and Test positivity duration")+labs(color="Viral clearance rate")+
+   theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=14))+  scale_color_viridis(option = "D")
+ 
+
+  ggplot(d1, aes(x = dv, y = tpd, color=di))+geom_point()
+ 
+ 
+#Figure 26-----------------------------------------------------------------------------
+ #For 4 different tests:
+ diag_sens <- foreach(ind = 1:1000, .packages=c("deSolve")) %dopar% {
+   parameters_i[['di']] = di[ind]
+   parameters_i[['dv']] = dv[ind]
+   
+   model.out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+   mod<-as.data.frame(model.out)
+   mod$ts1<-ifelse(mod$V>100,1,0)
+   mod$ts2<-ifelse(mod$V>2.09*10^6,1,0)
+   mod$ts3<-ifelse(mod$Am>336,1,0)
+   mod$ts4<-ifelse(mod$Ag>1206,1,0)
+   mod$time<-model.out[,'time']
+   
+   mod0<-subset(mod,mod$ts1>0)
+   tpd1<-c(1, min(mod0$time),max(mod0$time))
+   
+   mod0<-subset(mod,mod$ts2>0)
+   tpd2<-c(2,  min(mod0$time),max(mod0$time))
+   
+   mod0<-subset(mod,mod$ts3>0)
+   tpd3<-c(3, min(mod0$time),max(mod0$time))
+   
+   mod0<-subset(mod,mod$ts4>0)
+   tpd4<-c(4, min(mod0$time),max(mod0$time))
+   tpd<-c(parameters_i[['dv']], parameters_i[['di']],tpd1,tpd2,tpd3,tpd4)
+   return(tpd)
+ }
+ 
+ diag_sens1<-as.data.frame(diag_sens)
+ diag_sens2<-t(diag_sens1)
+rownames(diag_sens2)<-NULL 
+colnames(diag_sens2)<-c("dv",'di','1','pcr_ts','pcr_te','2','agrdt_ts','agrdt_te','3','igm_ts','igm_te','4','igg_ts','igg_te')
+diag_sens2<-diag_sens2[,c(-3,-6,-9,-12)]
+diag_sens2<-as.data.frame(diag_sens2)
+
+diag_sens2$tpd_pcr<-diag_sens2$pcr_te-diag_sens2$pcr_ts
+diag_sens2$tpd_agrdt<-diag_sens2$agrdt_te-diag_sens2$agrdt_ts
+diag_sens2$tpd_igm<-diag_sens2$igm_te-diag_sens2$igm_ts
+diag_sens2$tpd_igg<-diag_sens2$igg_te-diag_sens2$igg_ts
+
+#Calulating TPD=0 for Ag-RDT
+#Percentage who would never test positive
+table(is.infinite(diag_sens2$tpd_agrdt))
+178/1000
+
+library(ggplot2)
+
+p1<-ggplot(diag_sens2, aes(x = di, y = tpd_pcr, color=dv))+geom_point()+
+  xlab("Infected cell clearance rate")+ylab("Test positivity duration")+
+  ggtitle(" RT-PCR")+labs(color="Viral clearance rate")+
+  theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15),legend.position = "none")+  scale_color_viridis(option = "D")
+ 
+
+        
+p2<- ggplot(diag_sens2, aes(x = di, y = tpd_agrdt, color=dv))+geom_point()+
+          xlab("Infected cell clearance rate")+ylab("Test positivity duration")+
+          ggtitle("Ag-RDT")+labs(color="Viral clearance rate")+
+          theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15),legend.position = "none")+  scale_color_viridis(option = "D")
+ 
+ 
+ p3<-ggplot(diag_sens2, aes(x = di, y = tpd_igm, color=dv))+geom_point()+
+   xlab("Infected cell clearance rate")+ylab("Test positivity duration")+
+   ggtitle("IgM test")+labs(color="Viral clearance rate")+
+  theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15),legend.position = "none")+  scale_color_viridis(option = "D")
+ 
+ 
+ p4<- ggplot(diag_sens2, aes(x = di, y = tpd_igg, color=dv))+geom_point()+
+   xlab("Infected cell clearance rate")+ylab("Test positivity duration")+
+   ggtitle("IgG test")+labs(color="Viral clearance rate")+
+   theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15),legend.position = "none")+  scale_color_viridis(option = "D")
+ 
+ 
+ library(ggpubr)
+ ggarrange(p1,p2,p3,p4,nrow=2,ncol=2)
+ 
+ #Ranges for testing positive duration/interval for 4 tests: 
+ range(diag_sens2$tpd_agrdt)
+  range(diag_sens2$tpd_pcr)
+   range(diag_sens2$tpd_igm)
+    range(diag_sens2$tpd_igg)
+```
+
+
+```{r}
+#TPD probability at each time point
+#For different LoD, calculate the probaility of a positive result at each time point (Proportion of runs with positive result for the given LoD)
+lodlist<-c(10^2,10^3,10^4,10^5,10^6)
+
+
+for (i in 1:5){
+  lod0<-lodlist[i]
+tpd_prob <- sapply(modelResults.final, function(virus) {
+  tmp<-ifelse(virus>lod0,1,0)
+  pp<-c(length(subset(tmp,tmp>0)),length(subset(tmp,tmp==0)))
+ pp   %>% as_tibble
+}) 
+
+
+tpd_prob1<-as.data.frame(tpd_prob)
+tpd_prob2<-t(tpd_prob1)
+colnames(tpd_prob2)<-c("pos","neg")
+rownames(tpd_prob2)<-NULL
+tp_prob<-as.data.frame(tpd_prob2)
+tp_prob$pp<-100*tp_prob$pos/(tp_prob$pos+tp_prob$neg)
+tp_prob$time<-times
+assign(paste0('tp_prob_',i+1),tp_prob)
+}
+
+
+library(paletteer)
+library(ggplot2)
+library(ggsci)
+
+
+library(ggplot2)
+library(ggpubr)
+library(ggthemes)
+library(viridis)
+library(RColorBrewer)
+library(extrafont)
+library(ggplot2)
+loadfonts(device = "win")
+windowsFonts(Times = windowsFont("Century"))
+
+#Create a custom color scale
+
+
+plot_lod<-ggplot()+geom_line(data=tp_prob_6, aes(x = times, y = pp,color='6 Log10'),size=1)+
+  geom_line(data=tp_prob_5, aes(x = times, y = pp,color='5 Log10'),size=1)+
+  geom_line(data=tp_prob_4, aes(x = times, y = pp,color='4 Log10'),size=1)+
+  geom_line(data=tp_prob_3, aes(x = times, y = pp,color='3 Log10'),size=1)+
+  geom_line(data=tp_prob_2, aes(x = times, y = pp,color='2 Log10'),size=1)+
+  xlab("Time in days")+ylab("Probability of testing positive")+
+   ggtitle("LoD and and Probability of  testing positive")+labs(color="Viral clearance rate")+
+ xlim(0,30)+labs(color='LoD in copies/ml')+
+   theme_minimal()+
+   theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15),legend.position = "bottom")+
+  scale_color_manual(values=c( "6 Log10"="#D7191C","5 Log10"="#FDAE61","4 Log10"= "goldenrod","3 Log10"= "#ABDDA4",
+                              "2 Log10"= "#2B83BA"))
+```

@@ -1,0 +1,510 @@
+Full model:    COVID target cell model with immune response
+Adding B cells and Antibody production: IgG and IgM separately.
+Creating separate function: Cov_i, vectors: parameters_i, state_i and init function pint_i
+```{r}
+#library(readr)
+library(deSolve)
+
+# Set the start and end time for the model simulation
+day_start <- 0
+day_stop <- 200
+times <- seq(day_start, day_stop, by = 1/24)
+
+# Set the start and end time for the model simulation
+#MODEL PARAMETERS INITIALISE
+pint_i<-function(){
+parameters <- c(p=2.5, #Viral production rate (Fitting)
+                ki=3.5*10^-8,  #Rate of infection of Target cells per infected cell (Fitting)
+                di=1.07,#Death rate of infected cells (Kim et al, Fitting)
+                dv=2.3, #Clearance of viral particles (Fitting)
+                um=0.005,#Rate of viral neutralization by IgM
+                am=0.0,#Rate of IgM consumption because of neutralization
+                ug=0.05,#Rate of viral neutralization by IgG
+                ag=0.0,#Rate of IgG consumption because of neutralization
+                b1=10^-4,# Rate of B cell activation because of virus
+                b2=0.05,#B cell deactivation
+                pm=100, #IgM production rate
+                pg=80,#IgG production rate
+                rm=0.25,#IgM degradation rate
+                rg=0.01,
+                g=0.8,
+                K=4*10^8) #IgG degradation rate
+}
+parameters_i<-pint_i()
+                       
+initV<-1#Initial viral laod
+initI<-0 # Intial infected cells
+initE<-4*10^8 # Target cells (Epithelial cells in the URT)
+
+
+state_i <- c(V=initV, I=initI, E=initE, B=0, Am=0, Ag=0)
+# set up a function to solve the equations
+Cov_i<-function(t, state_i, parameters) 
+{
+  with(as.list(c(state_i, parameters)),
+       {
+         # define variables
+         
+
+         
+         # rate of change
+         dE<- -ki*V*E +g*E*(1-((E+I)/K))
+         dI<- ki*V*E-di*I
+         dV<- p*I-dv*V -um*V*Am -ug*V*Ag
+         dB<-b1*V*(1-B)-b2*B
+         dAm<-pm*B-rm*Am-am*V*Am
+         dAg<-pg*B-rg*Ag-ag*V*Ag
+         # return the rate of change
+         list(c(dV,dI,dE,dB,dAm,dAg))
+       }
+  ) 
+  
+}
+# run the model
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+
+# a simple plot of the model output
+plot(out)
+
+model1_i<-out
+    fv_i<-model1_i[,'V']
+    lfv_i<-log10(fv_i)
+    ic_i<-model1_i[,'I']
+    tc_i<-model1_i[,'E']
+    abm<-model1_i[,'Am']
+    abg<-model1_i[,'Ag']
+
+    model1_i<-as.data.frame(model1_i)
+
+```
+
+
+New parameters: LoD set for 4 tests:
+[Vr, Va, IgM, IgG]
+
+```{r}
+
+
+#Cut-off for antibodies
+#IgM detection at median 5 days [3-6] Guo et al
+#IgG detection at median 14 days [10-18] Guo et al
+
+abm[24*10]
+#336
+abg[24*19]
+#1206
+
+test<-c('RTPCR','Ag-RDT','IgM','IgG')
+test_type<-c('V','V','Am','Ag')
+lod<-c(100,2.09*10^6,336,1206)
+
+#Function to give start, end and duration of testing positive (TPD) for a set of tests for 1 individual
+#Individual viral dynamics output to be fed into "mod"
+
+diag_out<-function(test, test_type,lod,mod){
+mod<-mod[,c('time','V','Am','Ag')]
+res<-NULL
+tpd<-NULL
+for (i in 1:4){
+res0<-ifelse(mod[,test_type[i]]>lod[i],1,0)
+res<-cbind(res,res0)
+res0<-as.data.frame(res0)
+res0$time<-mod$time
+res0s<-subset(res0,res0>0)
+tpd0<-c(test[i],test_type[i],min(res0s$time),max(res0s$time))
+tpd<-cbind(tpd,tpd0)
+}
+
+diag<-t(tpd)
+diag<-as.data.frame(diag)
+colnames(diag)<-c('test','test_type','ts','te')
+diag$ts<-round(as.numeric(diag$ts),1)
+diag$te<-round(as.numeric(diag$te),1)
+diag$tp_dur<-diag$te-diag$ts
+return(list(diag,res))
+}
+
+```
+Patient 1: Base case
+Simulating dyanmics nad calculation TPDs for the patient on different tests
+
+```{r}
+#Patient 1
+library(wesanderson)
+mod<-as.data.frame(model1_i)
+
+test<-c('RTPCR','Ag-RDT','IgM','IgG')
+test_type<-c('V','V','Am','Ag')
+lod<-c(100,10^6,336,1206)
+
+diag0<-diag_out(test, test_type,lod,mod)
+diag_p1<-as.data.frame(diag0[1])
+
+diag<-diag_p1
+
+plot_p1<-ggplot()+
+  geom_rect(aes(ymin=0,ymax=1,xmin = diag$ts[1], xmax = diag$te[1],fill="PCR"),colour=NA, position='dodge')+
+  geom_rect(aes(ymin=1,ymax=2,xmin = diag$ts[2], xmax = diag$te[2],fill="Ag-RDT"),colour=NA, position='dodge')+
+  geom_rect(aes(ymin=2,ymax=3,xmin = diag$ts[3], xmax = diag$te[3],fill="IgM-test"),colour=NA, position='dodge')+
+  geom_rect(aes(ymin=3,ymax=4,xmin = diag$ts[4], xmax = diag$te[4],fill="IgG-test"),colour=NA, position='dodge')+
+  scale_fill_manual('Positivity interval', values = c("PCR"='cadetblue2',"Ag-RDT"='deepskyblue3',"IgM-test"='tan2',"IgG-test"='gold1'),
+                    guide = guide_legend(override.aes = list(alpha = 0.5))) +
+  geom_vline( xintercept=diag$te[1:4],linetype='dotted', col = 'seagreen3')+
+  geom_vline( xintercept=diag$ts[2:4],linetype='dotted', col = 'lightblue')+
+  geom_line(aes(x=times,y=log10(mod$V),color='Viral load'),size=0.8)+ 
+  geom_line(aes(x=times,y=mod$Am/100,color='IgM'),size=0.8)+
+  geom_line(aes(x=times,y=mod$Ag/200,color='IgG'),size=0.8) +labs(color = 'Quantity')+
+  scale_y_continuous( name = "Free virus log  10 copies/ml",sec.axis = sec_axis( trans=~.*100, 
+                      name="Antibody response (au)"), limits = c(-1, 11))+
+  ylab('log 10 RNA copies/ml')+xlab('Time in days')+
+  scale_x_continuous(limits=c(0,ceiling(diag$te[4]/10)*10), breaks=c(seq(0,160,20)))+
+     theme_minimal()+
+     theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=13),
+                  legend.position = 'bottom')+
+  ggtitle("Infection dynamics and test positivity in Base case")
+          
+    
+```
+Patient 2: Old person case:
+
+```{r}
+
+state_i <- c(V=initV, I=initI, E=initE, B=0, Am=0, Ag=0)
+parameters_i<-pint_i()
+            #decreasing infected cell death rate, viral clearance
+            parameters_i['di']<-0.8
+            parameters_i['dv']<-1.8
+            #decreasing B cell activation, Neutralization capacities of Ab, and production of IgG
+            parameters_i['b1']<-0.85*(10^-4)
+            parameters_i['ug']<-0.04
+            parameters_i['um']<-0.004
+            parameters_i['pm']<-100
+            parameters_i['pg']<-50
+            
+            parameters_i['rm']<-0.28
+            parameters_i['rg']<-0.01
+
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+model2_i<-as.data.frame(out)
+
+ggplot()+ 
+        geom_line(aes(x=times,y=log10(model1_i$V),color='V1'),size=0.8)+ 
+        geom_line(aes(x=times,y=log10(model2_i$V),color='V2'),size=0.8)+ 
+        geom_line(aes(x=times,y=model1_i$Am/100,color='IgM1'),size=0.8)+ 
+        geom_line(aes(x=times,y=model2_i$Am/100,color='IgM2'),size=0.8)+ 
+        geom_line(aes(x=times,y=model1_i$Ag/200,color='IgG1'),size=0.8)+ 
+        geom_line(aes(x=times,y=model2_i$Ag/200,color='IgG2'),size=0.8)+ 
+        ylab('Free virus:log 10 copies/ml')+   xlab('Time in days')+
+        labs(color = 'Model') +ggtitle('In-host SARS-Cov2 dynamics')+
+        theme(text = element_text(size=12))+xlim(0,200)+ylim(-1,15)
+
+diag0<-diag_out(test, test_type,lod,model2_i)
+diag_p2<-as.data.frame(diag0[1])
+
+mod<-model2_i
+diag<-diag_p2
+is.na(diag)<-sapply(diag, is.infinite)
+diag[is.na(diag)]<-0
+
+plot_p2<-ggplot()+
+  geom_rect(aes(ymin=0,ymax=1,xmin = diag$ts[1], xmax = diag$te[1],fill="PCR"),colour=NA, position='dodge')+
+  geom_rect(aes(ymin=1,ymax=2,xmin = diag$ts[2], xmax = diag$te[2],fill="Ag-RDT"),colour=NA, position='dodge')+
+  geom_rect(aes(ymin=2,ymax=3,xmin = diag$ts[3], xmax = diag$te[3],fill="IgM-test"),colour=NA, position='dodge')+
+  geom_rect(aes(ymin=3,ymax=4,xmin = diag$ts[4], xmax = diag$te[4],fill="IgG-test"),colour=NA, position='dodge')+
+  scale_fill_manual('Positivity interval', values = c("PCR"='cadetblue2',"Ag-RDT"='deepskyblue3',"IgM-test"='tan2',"IgG-test"='gold1'),
+                    guide = guide_legend(override.aes = list(alpha = 0.5))) +
+  geom_vline( xintercept=diag$te[1:4],linetype='dotted', col = 'seagreen3')+
+  geom_vline( xintercept=diag$ts[2:4],linetype='dotted', col = 'lightblue')+
+  geom_line(aes(x=times,y=log10(mod$V),color='Viral load'),size=0.8)+ 
+  geom_line(aes(x=times,y=mod$Am/100,color='IgM'),size=0.8)+
+  geom_line(aes(x=times,y=mod$Ag/200,color='IgG'),size=0.8) +labs(color = 'Quantity')+
+  scale_y_continuous( name = "Free virus log  10 copies/ml",sec.axis = sec_axis( trans=~.*100, 
+                      name="Antibody response (au)"), limits = c(-1, 11))+
+  ylab('log 10 RNA copies/ml')+xlab('Time in days')+
+  scale_x_continuous(limits=c(0,ceiling(diag$te[4]/10)*10), breaks=c(seq(0,160,20)))+
+     theme_minimal()+
+     theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=13),
+                  legend.position = 'bottom')+
+  ggtitle("Infection dynamics and test positivity in Geriatic case")
+          
+    
+
+
+```
+Patient 3: Very young  person case:
+
+```{r}
+
+state_i <- c(V=initV, I=initI, E=initE, B=0, Am=0, Ag=0)
+parameters_i<-pint_i()
+            #decreasing infected cell death rate, viral clearance
+            parameters_i['di']<-1.2
+            parameters_i['dv']<-2.8
+            parameters_i['ki']<-3*(10^-8)
+            parameters_i['p']<-2
+
+       
+
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+model3_i<-as.data.frame(out)
+
+ggplot()+ 
+        geom_line(aes(x=times,y=log10(model1_i$V),color='V1'),size=0.8)+ 
+        geom_line(aes(x=times,y=log10(model3_i$V),color='V2'),size=0.8)+ 
+        geom_line(aes(x=times,y=model1_i$Am/100,color='IgM1'),size=0.8)+ 
+        geom_line(aes(x=times,y=model3_i$Am/100,color='IgM2'),size=0.8)+ 
+        geom_line(aes(x=times,y=model1_i$Ag/200,color='IgG1'),size=0.8)+ 
+        geom_line(aes(x=times,y=model3_i$Ag/200,color='IgG2'),size=0.8)+ 
+        ylab('Free virus:log 10 copies/ml')+   xlab('Time in days')+
+        labs(color = 'Model') +ggtitle('In-host SARS-Cov2 dynamics')+
+        theme(text = element_text(size=12))+xlim(0,200)+ylim(-1,15)
+
+
+diag0<-diag_out(test, test_type,lod,model3_i)
+diag_p3<-as.data.frame(diag0[1])
+
+
+
+mod<-model3_i
+diag<-diag_p3
+is.na(diag)<-sapply(diag, is.infinite)
+diag[is.na(diag)]<-0
+
+plot_p3<-ggplot()+
+  geom_rect(aes(ymin=0,ymax=1,xmin = diag$ts[1], xmax = diag$te[1],fill="PCR"),colour=NA, position='dodge')+
+  geom_rect(aes(ymin=1,ymax=2,xmin = diag$ts[2], xmax = diag$te[2],fill="Ag-RDT"),colour=NA, position='dodge')+
+  geom_rect(aes(ymin=2,ymax=3,xmin = diag$ts[3], xmax = diag$te[3],fill="IgM-test"),colour=NA, position='dodge')+
+  geom_rect(aes(ymin=3,ymax=4,xmin = diag$ts[4], xmax = diag$te[4],fill="IgG-test"),colour=NA, position='dodge')+
+  scale_fill_manual('Positivity interval', values = c("PCR"='cadetblue2',"Ag-RDT"='deepskyblue3',"IgM-test"='tan2',"IgG-test"='gold1'),
+                    guide = guide_legend(override.aes = list(alpha = 0.5))) +
+  geom_vline( xintercept=diag$te[1:4],linetype='dotted', col = 'seagreen3')+
+  geom_vline( xintercept=diag$ts[2:4],linetype='dotted', col = 'lightblue')+
+  geom_line(aes(x=times,y=log10(mod$V),color='Viral load'),size=0.8)+ 
+  geom_line(aes(x=times,y=mod$Am/100,color='IgM'),size=0.8)+
+  geom_line(aes(x=times,y=mod$Ag/200,color='IgG'),size=0.8) +labs(color = 'Quantity')+
+  scale_y_continuous( name = "Free virus log  10 copies/ml",sec.axis = sec_axis( trans=~.*100, 
+                      name="Antibody response (au)"), limits = c(-1, 11))+
+  ylab('log 10 RNA copies/ml')+xlab('Time in days')+
+  scale_x_continuous(limits=c(0,ceiling(diag$te[4]/10)*10), breaks=c(seq(0,160,20)))+
+     theme_minimal()+
+     theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=13),
+                  legend.position = 'bottom')+
+  ggtitle("Infection dynamics and test positivity in Healthy case")
+```
+TPD for all three patients
+```{r}
+diag_p1$pat<-'p1'
+diag_p2$pat<-'p2'
+diag_p3$pat<-'p3'
+
+
+diag_all<-as.data.frame(rbind(diag_p1,diag_p2,diag_p3))
+diag_all<-diag_all[
+  with(diag_all, order(test, pat)),
+]
+
+setwd("C:/Users/Rutuja Chhajed/OneDrive - Nexus365/FIND/Model/Outputs")
+write.csv(diag_all,"TPD_3simpat_0804.csv")
+```
+
+Testing Scenarios:
+For p1, p2 and p3:
+
+T1: Ag-RDT 3 times a week 
+ 
+ Day 0: day of exposure
+ Assuming we know this day 0
+ Test one at dt1=1 to 6
+ Test 2 at dt2= 4to 9
+ Test 3 at dt3=7 to 12
+ 
+a) Ag-RDT with LOD=2.09*10^6
+b)Ag-RDT with LOD=10^7
+```{r}
+
+lod<-c(10^7,2.09*10^6,10^5)
+ts_result<-NULL
+for (dt in 0:25)
+  {
+  dt1=dt
+  dt2=dt+3
+  dt3=dt+5
+
+#For p1, check V at dt1, dt2, dt3
+  #Compare with LoD of the t1, t2, t3 (All Ag-RDTs in this case)
+  #Return 1 for positive/ 0 for negative
+  
+ res1<- ifelse(model1_i$V[floor(dt1*24+1)]>lod[2],1,0)
+ res2<- ifelse(model1_i$V[floor(dt2*24)]>lod[2],1,0)
+res3<- ifelse(model1_i$V[floor(dt3*24)]>lod[2],1,0)
+ 
+ts_result<-rbind(ts_result,c(dt,res1,res2,res3))
+
+
+}
+
+colnames(ts_result)<-c('daystart','t1','t2','t3')
+ts_result<-as.data.frame(ts_result)
+ts_result$final<-ifelse(ts_result$t1+ts_result$t2+ts_result$t3>0,1,0)
+#ts1a_p1<-ts_result
+ts1a_p1<-ts_result
+
+#Testing for 10^7 LoD: Tested: All negative! Missed with any testtng!
+
+#TEsting for 10^5 LoD
+ts_result<-NULL
+for (dt in 0:25)
+  {
+  dt1=dt
+  dt2=dt+3
+  dt3=dt+5
+
+#For p1, check V at dt1, dt2, dt3
+  #Compare with LoD of the t1, t2, t3 (All Ag-RDTs in this case)
+  #Return 1 for positive/ 0 for negative
+  
+ res1<- ifelse(model1_i$V[floor(dt1*24+1)]>lod[3],1,0)
+ res2<- ifelse(model1_i$V[floor(dt2*24)]>lod[3],1,0)
+res3<- ifelse(model1_i$V[floor(dt3*24)]>lod[3],1,0)
+ 
+ts_result<-rbind(ts_result,c(dt,res1,res2,res3))
+
+
+}
+
+colnames(ts_result)<-c('daystart','t1','t2','t3')
+ts_result<-as.data.frame(ts_result)
+ts_result$final<-ifelse(ts_result$t1+ts_result$t2+ts_result$t3>0,1,0)
+#ts1a_p1<-ts_result
+ts1b_p1<-ts_result
+```
+Testing scenario 1 for patient 2
+
+```{r}
+lod<-c(10^7,2.09*10^6,10^5)
+
+ts_result<-NULL
+for (dt in 1:10)
+  {
+  dt1=dt
+  dt2=dt+3
+  dt3=dt+5
+
+#For p1, check V at dt1, dt2, dt3
+  #Compare with LoD of the t1, t2, t3 (All Ag-RDTs in this case)
+  #Return 1 for positive/ 0 for negative
+  
+ res1<- ifelse(model2_i$V[floor(dt1*24)]>lod[2],1,0)
+ res2<- ifelse(model2_i$V[floor(dt2*24)]>lod[2],1,0)
+ res3<- ifelse(model2_i$V[floor(dt3*24)]>lod[2],1,0)
+ 
+ts_result<-rbind(ts_result,c(dt,res1,res2,res3))
+}
+colnames(ts_result)<-c('daystart','t1','t2','t3')
+ts_result<-as.data.frame(ts_result)
+ts_result$final<-ifelse(ts_result$t1+ts_result$t2+ts_result$t3>0,1,0)
+ts1a_p2<-ts_result
+```
+
+Varying LoD of the Ag-RDt and seeing the difference on the TPD?
+
+```{r}
+
+  res<-NULL
+  tpd<-NULL
+  lod_agrdt<-c(1.70*10^3,2.29*10^4,9.55*10^4,3.8*10^5,8.51*10^5,2.09*10^6,3.80*10^6)
+  lod_agrdt<-seq(10^3,3.8*10^6,by=1000)
+mod<-model1_i
+for (i in 1:3800){
+
+res0<-ifelse(mod[,'V']>lod_agrdt[i],1,0)
+#res0<-if(lod[i]<10){ifelse(mod$V>lod[i],1,0)} else {ifelse(mod[,i]>lod[i],1,0)}
+res<-cbind(res,res0)
+res0<-as.data.frame(res0)
+res0$time<-mod$time
+res0s<-subset(res0,res0>0)
+tpd0<-c(lod_agrdt[i],min(res0s$time),max(res0s$time))
+tpd<-cbind(tpd,tpd0)
+}
+
+diag<-t(tpd)
+diag<-as.data.frame(diag)
+colnames(diag)<-c('LOD_AgRDT','ts','te')
+diag$ts<-round(as.numeric(diag$ts),1)
+diag$te<-round(as.numeric(diag$te),1)
+diag$tp_dur<-diag$te-diag$ts
+diag_agrdt_p1<-diag
+
+
+
+mod<-model3_i
+diag<-NULL
+  res<-NULL
+  tpd<-NULL
+for (i in 1:7){
+
+res0<-ifelse(mod[,'V']>lod_agrdt[i],1,0)
+#res0<-if(lod[i]<10){ifelse(mod$V>lod[i],1,0)} else {ifelse(mod[,i]>lod[i],1,0)}
+res<-cbind(res,res0)
+res0<-as.data.frame(res0)
+res0$time<-mod$time
+res0s<-subset(res0,res0>0)
+tpd0<-c(lod_agrdt[i],min(res0s$time),max(res0s$time))
+tpd<-cbind(tpd,tpd0)
+}
+
+diag<-t(tpd)
+diag<-as.data.frame(diag)
+colnames(diag)<-c('LOD_AgRDT','ts','te')
+diag$ts<-round(as.numeric(diag$ts),1)
+diag$te<-round(as.numeric(diag$te),1)
+diag$tp_dur<-diag$te-diag$ts
+diag_agrdt_p3<-diag
+
+
+
+diag_agrdt_p1$pat<-'p1'
+diag_agrdt_p3$pat<-'p3'
+
+diag_agrdt_p1p3<-rbind(diag_agrdt_p1,diag_agrdt_p3)
+
+write.csv(diag_agrdt_p1p3,"Ag-RDTLoDvar_TPD_p1p3.csv")
+
+```
+
+Ag-RDT IgM combo
+5,7,9 days
+```{r}
+lod<-c(100,2.09*10^6,200,1188)
+mod<-model2_i
+
+ res_agrdt1<- ifelse(mod$V[floor(5*24)]>lod[2],1,0)
+ res_igm1<- ifelse(mod$Am[floor(5*24)]>lod[3],1,0)
+ 
+  res_agrdt2<- ifelse(mod$V[floor(7*24)]>lod[2],1,0)
+ res_igm2<- ifelse(mod$Am[floor(7*24)]>lod[3],1,0)
+ 
+  res_agrdt3<- ifelse(mod$V[floor(9*24)]>lod[2],1,0)
+ res_igm3<- ifelse(mod$Am[floor(9*24)]>lod[3],1,0)
+ 
+  res_agrdt4<- ifelse(mod$V[floor(10*24)]>lod[2],1,0)
+ res_igm4<- ifelse(mod$Am[floor(10*24)]>lod[3],1,0)
+ 
+ 
+```
+

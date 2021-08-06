@@ -1,0 +1,838 @@
+Model 1: COVID model without Antibody response 
+Creating separate function: Cov, vectors: parameters, state and init function pint()
+
+```{r}
+library(readr)
+library(deSolve)
+
+# Set the start and end time for the model simulation
+day_start <- 0
+day_stop <- 100
+times <- seq(day_start, day_stop, by = 1/24)
+
+pint<-function()
+  {
+#MODEL PARAMETERS INITIALISE
+parameters <- c(p=3.07, #Viral production rate
+                ki=3.5*10^-8,  #Rate of infection of Target cells per infected cell
+                di=0.8,#Death rate of infected cells
+                dv=2.3,#Clearance rate of viral particles
+                g=0,#Growth rate of epithelial cells taken 0 in this simualtion
+                K=4*10^8)
+parameters}  
+
+parameters<-pint()
+initV<-1#Initial viral load from Vargas et al.
+initI<-0 # Initial infected cells
+initE<-4*10^8 # Target cells (Epithelial cells in the URT) From Baccam et al. 
+state <- c(V=initV, I=initI, E=initE) 
+
+
+# set up a function to solve the equations
+Cov<-function(t, state, parameters) 
+{
+  with(as.list(c(state, parameters)),
+       {
+         # rate of change
+         dV<- p*I-dv*V
+         dI<- ki*V*E-di*I
+         dE<- -ki*V*E +g*E*(1-((E+I)/K))
+
+         # return the rate of change
+         list(c(dV,dI,dE))
+       }
+  ) 
+}
+# run the model
+out <- ode(y = state, times = times, func = Cov, parms = parameters)
+
+#Store the basic output in vectors
+model1<-out
+    fv<-model1[,'V']
+    lfv<-log10(fv)
+    ic<-model1[,'I']
+    tc<-model1[,'E']
+    time<-model1[,'time']
+    
+```
+
+Model 2:    COVID target cell model with immune response
+Adding B cells and Antibody production: IgG and IgM separately.
+Creating separate function: Cov_i, vectors: parameters_i, state_i and init function pint_i
+
+```{r}
+library(readr)
+library(deSolve)
+
+# Set the start and end time for the model simulation
+day_start <- 0
+day_stop <- 180
+times <- seq(day_start, day_stop, by = 1/24)
+
+#MODEL PARAMETERS INITIALISE
+pint_i<-function(){
+parameters <- c(p=2.5, #Viral production rate (Fitting)
+                ki=3.5*10^-8,  #Rate of infection of Target cells per infected cell (Fitting)
+                di=1.07,#Death rate of infected cells (Kim et al, Fitting)
+                dv=2.3, #Clearance of viral particles (Fitting)
+                um=0.005,#Rate of viral neutralization by IgM
+                am=0.0,#Rate of IgM consumption because of neutralization
+                ug=0.05,#Rate of viral neutralization by IgG
+                ag=0.0,#Rate of IgG consumption because of neutralization
+                b1=10^-4,# Rate of B cell activation because of virus
+                b2=0.05,#B cell deactivation
+                pm=100, #IgM production rate
+                pg=80,#IgG production rate
+                rm=0.25,#IgM degradation rate
+                rg=0.01,
+                g=0.8,
+                K=4*10^8) #IgG degradation rate
+}
+parameters_i<-pint_i()
+                       
+initV<-0.31#Initial viral laod
+initI<-0 # Intial infected cells
+initE<-4*10^8 # Target cells (Epithelial cells in the URT)
+
+
+state_i <- c(V=initV, I=initI, E=initE, B=0, Am=0, Ag=0)
+# set up a function to solve the equations
+Cov_i<-function(t, state_i, parameters) 
+{
+  with(as.list(c(state_i, parameters)),
+       {
+         # define variables
+         
+
+         
+         # rate of change
+         dE<- -ki*V*E +g*E*(1-((E+I)/K))
+         dI<- ki*V*E-di*I
+         dV<- p*I-dv*V -um*V*Am -ug*V*Ag
+         dB<-b1*V*(1-B)-b2*B
+         dAm<-pm*B-rm*Am-am*V*Am
+         dAg<-pg*B-rg*Ag-ag*V*Ag
+         # return the rate of change
+         list(c(dV,dI,dE,dB,dAm,dAg))
+       }
+  ) 
+  
+}
+# run the model
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+
+# a simple plot of the model output
+plot(out)
+
+model1_i<-out
+    fv_i<-model1[,'V']
+    lfv_i<-log10(fv)
+    ic_i<-model1[,'I']
+    tc_i<-model1[,'E']
+
+```
+
+Plotting basic target cell model output:
+Option of adding regeneration term g=0.8
+
+```{r}
+
+library(ggplot2)
+library(ggpubr)
+library(ggthemes)
+library(viridis)
+library(RColorBrewer)
+library(extrafont)
+library(ggplot2)
+loadfonts(device = "win")
+windowsFonts(Times = windowsFont("Century"))
+library(scales) # to access break formatting functions
+#font_import()
+
+
+theme_set(theme(title=element_text(family='Garamond',size=16), plot.title = element_text(hjust = 0.5,face="bold",size=18),
+          strip.background = element_rect(fill="#F2D6CE",color="#FFFFFF"),
+          axis.text = element_text(family="Garamond",size=14),
+          strip.text = element_text(family="Garamond",size=14,face="bold"),
+          strip.placement = "outside",
+          legend.key.size = unit(2,"line"),
+          legend.text = element_text(family="Garamond",size=14)))
+
+#Figure 4: 
+f1<-ggplot()+ 
+          geom_line(aes(x=time,y=fv,color='Free virus'),size=0.8)+ ylab('Viral RNA copies/ml, Count')+xlab('Time in days')+
+          ggtitle("SARS-CoV2 infection dynamics") +labs(color = 'Compartment')+xlim(0,20)+ 
+          geom_line(aes(x=time,y=tc,color='Target cells'),size=0.6)+xlab('Time in days')+
+          geom_line(aes(x=time,y=ic,color='Infected cells'),size=0.8)+
+          theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15))
+          
+
+ggsave("Basic_Model.tiff", plot = last_plot(),path ="C:/Users/Rutuja Chhajed/OneDrive - Nexus365/FIND/Model/Outputs/v2plots",units="in", width=10, height=4, dpi=300, compression = "lzw")
+
+
+
+#Figure 5
+f2<- ggplot()+
+        geom_line(aes(x=time,y=lfv,color='Free virus'),size=0.8)+labs(color = 'Compartment') + ylab('log 10 RNA copies/ml')+
+        xlab('Time in days')+
+        xlim(0,30)+
+        geom_line(aes(x=time,y=log10(tc),color='Target cells'),size=0.8)+
+        ylim(-2,9)+ ylab('Log10 [Viral RNA copies/ml, Count]')+xlab('Time in days')+
+        labs(color = 'Compartment')+ggtitle("SARS-CoV2 infection dynamics (Log10 scale)")+
+        theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15))
+
+ggsave("Basic_Model.tiff", plot = f1,path ="C:/Users/Rutuja Chhajed/OneDrive - Nexus365/FIND/Model/Outputs/v2plots",units="in", width=10, height=4, dpi=300, compression = "lzw")
+
+#Figure 6
+f1_norm<-ggplot()+ 
+          geom_line(aes(x=time,y=fv/max(fv),color='Free virus'),size=0.8)+ ylab('Percentage')+xlab('Time in days')+
+          ggtitle("SARS-CoV2 infection dynamics") +labs(color = 'Compartment')+xlim(0,20)+ 
+          geom_line(aes(x=time,y=tc/max(tc),color='Target cells'),size=0.6)+xlab('Time in days')+
+          geom_line(aes(x=time,y=ic/max(ic),color='Infected cells'),size=0.8)+
+          theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15))
+
+
+    
+```
+
+#Figure 7
+Model2: Output for Base model with regeneration of target cells
+```{r}
+parameters<-pint()
+parameters['g']<-0.8
+model2 <- ode(y = state, times = times, func = Cov, parms = parameters)
+model2<-as.data.frame(model2)
+
+
+    p7<- ggplot()+ 
+        geom_line(aes(x=time,y=log10(model2$V),color="Free virus"),size=0.8)+ 
+        geom_line(aes(x=time,y=log10(model2$E),color='Target cells'),size=0.4,linetype='dashed')+ 
+        ylab('Free virus:log 10 copies/ml')+   xlab('Time in days')+ylim(-2,10)+
+        labs(color = 'Model') +ggtitle('Viral dynamics with Epithelial regeneration')+
+        theme_minimal()+
+        theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.text = element_text(family="Century",size=15))
+
+```
+
+
+
+
+Comparing response with and without humoral immunity without regeneration
+Model 1= COntains output from Base model with g=0
+Model 1_i= COntains output from Full model with g=0
+
+Figure 8: SARS-CoV2 infection dynamics from base model and full model without epithelial regeneration.
+```{r}
+
+#Figure 8: BAse vs Full model without regenrration
+
+library(ggplot2)
+library(ggpubr)
+library(ggthemes)
+library(viridis)
+library(RColorBrewer)
+library(extrafont)
+library(ggplot2)
+loadfonts(device = "win")
+windowsFonts(Times = windowsFont("Garamond"))
+library(scales) # to access break formatting functions
+#font_import()
+times <- seq(day_start, 150, by = 1/24)
+
+parameters <- pint()
+out <- ode(y = state, times = times, func = Cov, parms = parameters)
+model1<-as.data.frame(out)
+
+
+state_i <- c(V=initV, I=initI, E=initE, B=0, Am=0, Ag=0)
+parameters_i <- pint_i()
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+
+model1_i<-as.data.frame(out)
+    fv_i<-out[,'V']
+    lfv_i<-log10(fv_i)
+    ic_i<-out[,'I']
+    abm<-out[,'Am']
+    abg<-out[,'Ag']
+
+library(ggplot2)
+library(ggthemes) # Load
+ 
+    
+#Figure 8: SARS-CoV2 infection dynamics from base model and full model without epithelial regeneration.
+p8<- ggplot()+ 
+        geom_line(aes(x=times,y=log10(model1$V),color='Without humoral immunity'),size=0.8)+ 
+        geom_line(aes(x=times,y=log10(model1_i$V),color='With humonal immunity'),size=0.8)+ 
+        ylab('Free virus:log 10 copies/ml')+   xlab('Time in days')+ylim(-2,10)+
+        labs(color = 'Model') +ggtitle('In-host SARS-Cov2 dynamics')+
+        theme_pubr()+xlim(0,30)+
+        theme_minimal()+
+        theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))
+
+
+#Difference in peak:
+max(fv)/max(fv_i)
+#27.82422
+#Log scale=10^1.45
+
+#Figure 9: SARS-CoV2 viral and antibody from the full model
+#Final plot of all dynamics! Virus, IgM and IgG without regeneration
+
+p9<-ggplot()+ 
+   geom_line(aes(x=times,y=log10(model1_i$V),color='Viral load'),size=0.8)+ 
+   geom_line(aes(x=times,y=model1_i$Am/100,color='IgM'),size=0.8) +
+   geom_line(aes(x=times,y=model1_i$Ag/200,color='IgG'),size=0.8) +
+   scale_y_continuous( name = "Free virus log 10 copies/ml",sec.axis = sec_axis( trans=~.*100, name="Antibody response (au)"), limits = c(-1, 12)) +
+   ylab('Free virus:log 10 copies/ml')+   xlab('Time in days')+labs(color = 'Model') +
+   ggtitle('In-host SARS-Cov2 dynamics')+ theme_minimal()+ theme(text = element_text(size=12))+xlim(0,150) +
+          theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))+
+                  scale_fill_manual(values = c("#999999", "#E69F00", "#56B4E9"),aesthetics = "color")
+
+p10<-ggplot()+ 
+   geom_line(aes(x=times,y=log10(model1_i$V)/max(log10(model1_i$V)),color='Viral load'),size=0.8)+ 
+   geom_line(aes(x=times,y=model1_i$Am/max(model1_i$Am),color='IgM'),size=0.8) +
+   geom_line(aes(x=times,y=model1_i$Ag/max(model1_i$Ag),color='IgG'),size=0.8) +
+   ylab('Percentage')+   xlab('Time in days')+labs(color = 'Model') +
+  ylim(0,1)+
+   ggtitle('In-host SARS-Cov2 viral and antibody dynamics: Normalised')+ theme_minimal()+ theme(text = element_text(size=12))+xlim(0,50) +
+          theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))+
+                  scale_fill_manual(values = c("#999999", "#E69F00", "#56B4E9"),aesthetics = "color")
+
+abm_n<-model1_i$Am/max(model1_i$Am)
+abg_n<-model1_i$Ag/max(model1_i$Ag)
+abm_n<-round(abm_n,1)
+match(0.5,abm_n)
+match(0.5,abm_n)/24
+
+which(abm_n==0.5)/24
+
+#5.25-6 days to reach 50%
+#39-43 days to drop to 50%
+
+which(abm_n==1)/24
+#13 days to reach its peak value, stays till 25th day and declines
+
+
+abg_n<-round(abg_n,1)
+match(0.5,abg_n)
+match(0.5,abg_n)/24
+
+
+
+which(abg_n==0.5)/24
+#15-18 days to reach 50%
+#130-150 days to drop to 50%
+
+which(abg_n==1)/24
+#37 days to reach peak and declines after 66 days?
+```
+Comparing response with and without humoral immunity with g=0.8
+
+Figure 11: SARS-CoV2 infection dynamics from base model and full model with epithelial regeneration.
+
+Model 2: Base with regeneration
+Model 2_i= Full with regenration
+```{r}
+parameters<-pint()
+parameters['g']<-0.8
+model2 <- ode(y = state, times = times, func = Cov, parms = parameters)
+model2<-as.data.frame(model2)
+
+parameters_i<-pint_i()
+parameters_i['g']<-0.8
+model2_i<- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+model2_i<-as.data.frame(model2_i)
+library(ggplot2)
+library(ggthemes) # Load
+library(ggpubr) # Load
+p11<- ggplot()+ 
+        geom_line(aes(x=times,y=log10(model2$V),color='Without humoral immunity'),size=0.8)+ 
+        geom_line(aes(x=times,y=log10(model2_i$V),color='With humonal immune response'),size=0.8)+ 
+        ylab('Free virus:log 10 copies/ml')+   xlab('Time in days')+
+        labs(color = 'Model') +ggtitle('In-host SARS-Cov2 dynamics')+
+        xlim(0,100)+ylim(-4,10)+
+         theme_minimal()+
+         theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))
+
+          
+
+```
+Exploratory analysis for Model 2, with regeneration term
+
+E1: Changing V(0)
+Figure 13 and 14
+```{r}
+parameter_i<-pint_i()
+parameters_i['g']<-0.8
+
+state_i['V']<-0.1
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv1<-out[,'V']
+if1<-out[,'I']
+ab1<-out[,'Am']
+abg1<-out[,'Ag']
+
+
+state_i['V']<-1
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv2<-out[,'V']
+if2<-out[,'I']
+ab2<-out[,'Am']
+abg2<-out[,'Ag']
+
+state_i['V']<-100
+out <-  ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv3<-out[,'V']
+if3<-out[,'I']
+ab3<-out[,'Am']
+abg3<-out[,'Ag']
+
+state_i['V']<-1000
+out <-  ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv4<-out[,'V']
+if4<-out[,'I']
+ab4<-out[,'Am']
+abg4<-out[,'Ag']
+
+
+
+state_i['V']<-10000
+out <-  ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv5<-out[,'V']
+if5<-out[,'I']
+ab5<-out[,'Am']
+abg5<-out[,'Ag']
+
+
+library(ggplot2)
+
+  
+ p13<- ggplot()+ 
+          geom_line(aes(x=times,y=fv1,color='0.1X'),size=0.8)+
+          geom_line(aes(x=times,y=fv2,color='1X'),size=0.8)+
+          geom_line(aes(x=times,y=fv3,color='100X'),size=0.8)+
+          geom_line(aes(x=times,y=fv4,color='1000X'),size=0.8)+
+          geom_line(aes(x=times,y=fv5,color='10000X'),size=0.8)+
+         ylab('Free virus (copies/ml)')+xlab('Time in days')+xlim(c(0,30))+
+          labs(color = 'Initial viral load') +
+          ggtitle('Viral dynamics and initial viral load')+ 
+           theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))+
+                  scale_fill_manual(values = c("#999999", "#E69F00", "#56B4E9"),aesthetics = "color")
+
+ 
+ 
+
+ #Change in viral peak: from 1X to 10000X
+(max(fv5)- max(fv2))/max(fv2)
+ #9% increase!
+which.max(fv2)-which.max(fv5)
+#
+ p14<- ggplot()+ 
+          geom_line(aes(x=times,y=log10(fv1),color='0.1X'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv2),color='1X'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv3),color='100X'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv4),color='1000X'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv5),color='10000X'),size=0.8)+
+         ylab('Free virus (copies/ml)')+xlab('Time in days')+xlim(c(0,30))+
+          labs(color = 'Initial viral load') +ylim(-1,10)+
+          ggtitle('Viral dynamics and initial viral load')+ 
+           theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))+
+                  scale_fill_manual(values = c("#999999", "#E69F00", "#56B4E9", "#56B4E0","#56B6E9"),aesthetics = "color")
+ 
+
+  
+  #Not in the main text
+plot_temp1<-   ggplot()+ 
+   #geom_line(aes(x=times,y=ab0,color='A'),size=0.4)+
+          geom_line(aes(x=times,y=ab1,color='1X'),size=0.4)+
+          geom_line(aes(x=times,y=ab2,color='100X'),size=0.4)+
+          geom_line(aes(x=times,y=ab3,color='1000X'),size=0.4)+
+            geom_line(aes(x=times,y=ab4,color='10000X'),size=0.4)+ylab('IgM units')+xlab('Time in days')+xlim(c(0,30))+labs(color = 'Initial viral load') +ggtitle('In-host SARS-Cov2 dynamics: IgM')+ theme_stata()+  theme(text = element_text(size=12)) +
+  scale_color_manual(values = c("1X", "100X", "1000X","10000X"))+ scale_colour_hc()
+ 
+ 
+   #Not in the main text
+  
+plot_temp2 <- ggplot()+ 
+   #geom_line(aes(x=times,y=ab0,color='A'),size=0.4)+
+          geom_line(aes(x=times,y=abg1,color='1X'),size=0.4)+
+          geom_line(aes(x=times,y=abg2,color='100X'),size=0.4)+
+          geom_line(aes(x=times,y=abg3,color='1000X'),size=0.4)+
+            geom_line(aes(x=times,y=abg4,color='10000X'),size=0.4)+ylab('IgM units')+xlab('Time in days')+xlim(c(0,60))+labs(color = 'Initial viral load') +ggtitle('In-host SARS-Cov2 dynamics: IgG')+ theme_stata()+  theme(text = element_text(size=12)) +
+  scale_color_manual(values = c("1X", "100X", "1000X","10000X"))+ scale_colour_hc()
+
+```
+
+E2: Changing di
+Figure 15, 16: Changes in viral dynamics with infected cell clearance rate for full model
+```{r}
+
+parameters_i<-pint_i()
+parameters_i['g']<-0.8
+state_i <- c(V=initV, I=initI, E=initE, B=0, Am=0, Ag=0)
+times <- seq(day_start, day_stop, by = 1/24)
+
+parameters_i['di']<-0.2
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv1<-out[,'V']
+if1<-out[,'I']
+
+parameters_i['di']<-0.5
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv2<-out[,'V']
+if2<-out[,'I']
+
+
+parameters_i['di']<-0.7
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv3<-out[,'V']
+if3<-out[,'I']
+
+parameters_i['di']<-1.07
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv4<-out[,'V']
+if4<-out[,'I']
+
+parameters_i['di']<-2
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv5<-out[,'V']
+if5<-out[,'I']
+
+library(ggplot2)
+
+p15<-ggplot()+ 
+          geom_line(aes(x=times,y=fv1,color='0.2'),size=0.8)+
+          geom_line(aes(x=times,y=fv2,color='0.5'),size=0.8)+
+          geom_line(aes(x=times,y=fv3,color='0.7'),size=0.8)+
+          geom_line(aes(x=times,y=fv4,color='1.07'),size=0.8)+
+            geom_line(aes(x=times,y=fv5,color='2'),size=0.8)+
+          ylab('Free virus (copies/ml)')+xlab('Time in days')+xlim(c(0,60))+
+          labs(color = 'di: per day') +
+          ggtitle('Viral dynamics and infected cell clearance rate (di)')+ 
+            theme_minimal()+
+         theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))
+
+
+
+p16<-ggplot()+ 
+          geom_line(aes(x=times,y=log10(fv1),color='0.2'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv2),color='0.5'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv3),color='0.7'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv4),color='1.07'),size=0.8)+
+            geom_line(aes(x=times,y=log10(fv5),color='2'),size=0.8)+
+          ylab('Free virus (Log copies/ml)')+xlab('Time in days')+xlim(c(0,60))+ylim(0,10)+
+          labs(color = 'di:per day') +
+             ggtitle('Viral dynamics and infected cell clearance rate (di): Log scale')+ 
+            theme_minimal()+
+         theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))
+
+  #scale_color_manual(values = c("1X", "100X", "1000X","10000X"))+ scale_colour_hc()
+ 
+
+ #Change in viral peak: from 1X to 10000X
+(max(fv2)- max(fv4))/max(fv4)
+ #164% increase!
+which.max(fv4)-which.max(fv2)
+#
+ #Change in viral peak: from 1X to 10000X
+(max(fv5)- max(fv4))/max(fv4)
+ #-0.88139 dncrease!
+
+
+```
+Figure 17-18: Changes in viral dynamics with viral clearance rate for full model
+E3: Changing dv
+```{r}
+library(ggplot2)
+library(ggpubr)
+library(ggthemes)
+library(viridis)
+library(RColorBrewer)
+library(extrafont)
+library(ggplot2)
+loadfonts(device = "win")
+windowsFonts(Times = windowsFont("Century"))
+parameters_i<-pint_i()
+parameters_i['g']<-0.8
+state_i <- c(V=initV, I=initI, E=initE, B=0, Am=0, Ag=0)
+times <- seq(day_start, day_stop, by = 1/24)
+
+
+parameters_i['dv']<-0.6
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv1<-out[,'V']
+if1<-out[,'I']
+
+parameters_i['dv']<-1.2
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv2<-out[,'V']
+if2<-out[,'I']
+
+
+parameters_i['dv']<-2.4
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv3<-out[,'V']
+if3<-out[,'I']
+
+parameters_i['dv']<-4.8
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv4<-out[,'V']
+
+if4<-out[,'I']
+
+
+parameters_i['dv']<-6
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv5<-out[,'V']
+if5<-out[,'I']
+library(ggplot2)
+
+
+  
+ p17<- ggplot()+ 
+          geom_line(aes(x=times,y=fv5,color='6'),size=0.8)+
+          geom_line(aes(x=times,y=fv4,color='4'),size=0.8)+
+          geom_line(aes(x=times,y=fv3,color='2.4'),size=0.8)+
+          geom_line(aes(x=times,y=fv2,color='1.2'),size=0.8)+
+             geom_line(aes(x=times,y=fv1,color='0.6'),size=0.8)+
+          ylab('Free virus (copies/ml)')+xlab('Time in days')+xlim(c(0,30))+
+     labs(color = 'dv: per day') +
+          ggtitle('Viral dynamics and viral clearance rate (dv)')+ 
+             theme_minimal()+
+         theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))+
+   scale_color_manual(values = c("6","4.8","2.4","1.2","0.6"))
+ 
+ 
+  p18<- ggplot()+ 
+          geom_line(aes(x=times,y=log10(fv5),color='6'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv4),color='4'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv3),color='2.4'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv2),color='1.2'),size=0.8)+
+             geom_line(aes(x=times,y=log10(fv1),color='0.6'),size=0.8)+
+          ylab('Log Free virus (copies/ml)')+xlab('Time in days')+xlim(c(0,30))+ylim(-1,8)+
+     labs(color = 'dv: per day') +
+          ggtitle('Viral dynamics and viral clearance rate (dv)')+ 
+             theme_minimal()+
+         theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))+
+   scale_color_manual(values = c("6","4.8","2.4","1.2","0.6"))
+  
+
+ 
+
+ #Change in viral peak: From 2.4 to 1.2
+(max(fv1)- max(fv2))/max(fv2)
+ #30% increase!
+
+  
+  (max(fv5)- max(fv2))/max(fv2)
+ #92% decrease
+  
+  
+```
+Exploratory analysis for Model 2, with regeneration term
+
+E3: Changing V(0)
+Figure 13 and 14
+```{r}
+parameter_i<-pint_i()
+parameters_i['g']<-0.8
+
+state_i['V']<-0.1
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv1<-out[,'V']
+if1<-out[,'I']
+ab1<-out[,'Am']
+abg1<-out[,'Ag']
+
+
+state_i['V']<-1
+out <- ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv2<-out[,'V']
+if2<-out[,'I']
+ab2<-out[,'Am']
+abg2<-out[,'Ag']
+
+state_i['V']<-100
+out <-  ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv3<-out[,'V']
+if3<-out[,'I']
+ab3<-out[,'Am']
+abg3<-out[,'Ag']
+
+state_i['V']<-1000
+out <-  ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv4<-out[,'V']
+if4<-out[,'I']
+ab4<-out[,'Am']
+abg4<-out[,'Ag']
+
+
+
+state_i['V']<-10000
+out <-  ode(y = state_i, times = times, func = Cov_i, parms = parameters_i)
+fv5<-out[,'V']
+if5<-out[,'I']
+ab5<-out[,'Am']
+abg5<-out[,'Ag']
+
+
+library(ggplot2)
+
+  
+ p13<- ggplot()+ 
+          geom_line(aes(x=times,y=fv1,color='0.1X'),size=0.8)+
+          geom_line(aes(x=times,y=fv2,color='1X'),size=0.8)+
+          geom_line(aes(x=times,y=fv3,color='100X'),size=0.8)+
+          geom_line(aes(x=times,y=fv4,color='1000X'),size=0.8)+
+          geom_line(aes(x=times,y=fv5,color='10000X'),size=0.8)+
+         ylab('Free virus (copies/ml)')+xlab('Time in days')+xlim(c(0,30))+
+          labs(color = 'Initial viral load') +
+          ggtitle('Viral dynamics and initial viral load')+ 
+           theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))+
+                  scale_fill_manual(values = c("#999999", "#E69F00", "#56B4E9"),aesthetics = "color")
+
+ 
+ 
+
+ #Change in viral peak: from 1X to 10000X
+(max(fv5)- max(fv2))/max(fv2)
+ #9% increase!
+which.max(fv2)-which.max(fv5)
+#
+ p14<- ggplot()+ 
+          geom_line(aes(x=times,y=log10(fv1),color='0.1X'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv2),color='1X'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv3),color='100X'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv4),color='1000X'),size=0.8)+
+          geom_line(aes(x=times,y=log10(fv5),color='10000X'),size=0.8)+
+         ylab('Free virus (copies/ml)')+xlab('Time in days')+xlim(c(0,30))+
+          labs(color = 'Initial viral load') +ylim(-1,10)+
+          ggtitle('Viral dynamics and initial viral load')+ 
+           theme_minimal()+
+          theme(title=element_text(family='Century',size=16), plot.title = element_text(hjust = 0.5,vjust = 1, face="bold",size=18),
+                  strip.background = element_rect(fill="#F2D6CE",color="#FFFFFE"),
+                  axis.text = element_text(family="Century",size=15),
+                  strip.text = element_text(family="Century",size=15,face="bold"),
+                  strip.placement = "outside",legend.key.size = unit(1.5,"line"),
+                  legend.position="bottom",
+                  legend.text = element_text(family="Century",size=15))+
+                  scale_fill_manual(values = c("#999999", "#E69F00", "#56B4E9", "#56B4E0","#56B6E9"),aesthetics = "color")
+ 
+
+  
+  #Not in the main text
+plot_temp1<-   ggplot()+ 
+   #geom_line(aes(x=times,y=ab0,color='A'),size=0.4)+
+          geom_line(aes(x=times,y=ab1,color='1X'),size=0.4)+
+          geom_line(aes(x=times,y=ab2,color='100X'),size=0.4)+
+          geom_line(aes(x=times,y=ab3,color='1000X'),size=0.4)+
+            geom_line(aes(x=times,y=ab4,color='10000X'),size=0.4)+ylab('IgM units')+xlab('Time in days')+xlim(c(0,30))+labs(color = 'Initial viral load') +ggtitle('In-host SARS-Cov2 dynamics: IgM')+ theme_stata()+  theme(text = element_text(size=12)) +
+  scale_color_manual(values = c("1X", "100X", "1000X","10000X"))+ scale_colour_hc()
+ 
+ 
+   #Not in the main text
+  
+plot_temp2 <- ggplot()+ 
+   #geom_line(aes(x=times,y=ab0,color='A'),size=0.4)+
+          geom_line(aes(x=times,y=abg1,color='1X'),size=0.4)+
+          geom_line(aes(x=times,y=abg2,color='100X'),size=0.4)+
+          geom_line(aes(x=times,y=abg3,color='1000X'),size=0.4)+
+            geom_line(aes(x=times,y=abg4,color='10000X'),size=0.4)+ylab('IgM units')+xlab('Time in days')+xlim(c(0,60))+labs(color = 'Initial viral load') +ggtitle('In-host SARS-Cov2 dynamics: IgG')+ theme_stata()+  theme(text = element_text(size=12)) +
+  scale_color_manual(values = c("1X", "100X", "1000X","10000X"))+ scale_colour_hc()
+
+```
+ 
